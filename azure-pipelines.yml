@@ -1,0 +1,78 @@
+trigger:
+- main
+
+pool:
+  name: azure-devops-iis-cicd
+
+variables:
+  buildConfiguration: 'Release'
+  siteName: 'SampleApp'
+  deployPath: 'C:\inetpub\wwwroot\SampleApp'
+
+################################
+# STAGE 1: CI - BUILD & TEST
+################################
+stages:
+- stage: CI
+  displayName: "CI - Build & Test"
+  jobs:
+  - job: Build
+    displayName: "Build Job"
+    steps:
+    - checkout: self
+
+    - task: UseDotNet@2
+      displayName: "Install .NET SDK"
+      inputs:
+        packageType: 'sdk'
+        version: '7.x'
+
+    - script: |
+        dotnet restore SampleApp/SampleApp.csproj
+        dotnet build SampleApp/SampleApp.csproj --configuration $(buildConfiguration)
+      displayName: "Restore & Build"
+
+    - script: dotnet publish SampleApp/SampleApp.csproj -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)
+      displayName: "Publish Application"
+
+    - task: PublishBuildArtifacts@1
+      displayName: "Publish Artifact"
+      inputs:
+        pathToPublish: '$(Build.ArtifactStagingDirectory)'
+        artifactName: 'drop'
+
+################################
+# STAGE 2: CD - DEPLOY TO IIS
+################################
+- stage: CD
+  displayName: "CD - Deploy to IIS"
+  dependsOn: CI
+  jobs:
+  - job: Deploy
+    displayName: "Deploy Job"
+    steps:
+
+    - task: DownloadBuildArtifacts@0
+      displayName: "Download Artifact"
+      inputs:
+        artifactName: 'drop'
+        downloadPath: '$(System.ArtifactsDirectory)'
+
+    - powershell: |
+        Import-Module WebAdministration
+
+        Write-Host "Deploy Path: $(deployPath)"
+        Write-Host "Site Name : $(siteName)"
+
+        if (!(Test-Path "$(deployPath)")) {
+            New-Item -ItemType Directory -Path "$(deployPath)" -Force
+        }
+
+        Copy-Item "$(System.ArtifactsDirectory)\drop\*" "$(deployPath)" -Recurse -Force
+
+        if (!(Test-Path "IIS:\Sites\$(siteName)")) {
+            New-WebSite -Name "$(siteName)" -Port 8080 -PhysicalPath "$(deployPath)" -ApplicationPool "DefaultAppPool"
+        }
+
+        Restart-WebAppPool "DefaultAppPool"
+      displayName: "Deploy to IIS"
